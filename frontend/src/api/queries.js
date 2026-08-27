@@ -31,7 +31,7 @@ export async function probeSchema() {
   if (missing) {
     return {
       ready: false,
-      reason: 'เชื่อม Supabase ได้ แต่ยังไม่ได้ติดตั้ง schema — เปิด SQL Editor แล้วรัน supabase/APPLY_ALL.sql',
+      reason: 'เชื่อม Supabase ได้ แต่ยังไม่ได้ติดตั้ง schema — ดูวิธีติดตั้งใน supabase/README.md',
     }
   }
 
@@ -191,4 +191,17 @@ function startOfTodayISO(tz) {
   // ชดเชยส่วนต่างระหว่างเวลาเครื่องกับเวลาร้าน
   const offset = now.getTime() - new Date(now.toLocaleString('en-US', { timeZone: tz })).getTime()
   return new Date(local.getTime() + offset).toISOString()
+}
+
+/**
+ * เช็คคิวด้วย token จาก QR บนบัตร — ไม่ต้องมี session
+ *
+ * คนยืนรอหน้าร้านยังไม่ได้เป็นลูกค้าของโต๊ะไหน จึงไม่ควรบังคับให้ล็อกอิน
+ * get_queue_status() เป็น security definer ที่ตรวจ token เอง (0011)
+ */
+export async function queueStatusByToken(token) {
+  if (!isConfigured) throw new Error('ยังไม่ได้ตั้งค่า Supabase')
+  const { data, error } = await supabase.rpc('get_queue_status', { p_token: token })
+  if (error) throw new Error(error.message)
+  return data
 }

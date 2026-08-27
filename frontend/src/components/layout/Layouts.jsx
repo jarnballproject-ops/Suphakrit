@@ -1,11 +1,36 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useStore } from '../../context/StoreProvider'
-import { Toaster, ConnectionBadge } from '../shared/Bits'
+import { Toaster, ConnectionBadge, Empty, Loading } from '../shared/Bits'
 import Icon from '../ui/Icon'
+import Login from '../../pages/Login'
 
 // ── ฝั่งลูกค้า ───────────────────────────────────────────────────────────────
 // มือถือ: แถบนำทางติดขอบล่าง · จอกว้าง: กลายเป็นแท็บแนวนอนใต้หัวเรื่อง
 export function CustomerLayout() {
+  const store = useStore()
+
+  // ทุกหน้าฝั่งลูกค้าอ่าน store.visitOf(customerVisitId) ทันทีโดยไม่เช็ค null
+  // ถ้าไม่มีรอบที่เปิดอยู่ (พิมพ์ /order ตรง ๆ, ปิดบิลแล้วแท็บยังค้าง, token ตาย)
+  // จะพังเป็นจอขาวทั้งหน้า — กันที่นี่ที่เดียวครอบทั้ง 4 หน้า
+  if (store.mode === 'probing') return <div className="cx"><Loading /></div>
+
+  const cxVisit = store.visitOf(store.customerVisitId)
+  if (store.mode === 'live' && !(cxVisit && store.tableOf(cxVisit.table_id))) {
+    return (
+      <div className="cx">
+        <CustomerBar title="Shabu Mood" />
+        <div className="cx__wrap" style={{ maxWidth: 420, margin: '0 auto', paddingTop: 48 }}>
+          <Empty
+            icon="tray"
+            title="ยังไม่ได้เข้าโต๊ะ"
+            hint="สแกน QR บนสลิปที่พนักงานให้ไว้ที่โต๊ะ เพื่อเริ่มสั่งอาหาร"
+          />
+        </div>
+        <Toaster />
+      </div>
+    )
+  }
+
   return (
     <div className="cx">
       <Outlet />
@@ -82,6 +107,17 @@ export function ConsoleLayout({ kind }) {
   const store = useStore()
   const items = kind === 'admin' ? ADMIN_NAV : STAFF_NAV
 
+  // โหมด demo ยังไม่มีฐานข้อมูลให้ล็อกอิน ปล่อยเข้าดูจอได้
+  //
+  // ห้ามเช็คแค่ "มี session" — ลูกค้าที่สแกน QR ก็มี session (anonymous sign-in)
+  // ตัวชี้ขาดคือแถวใน profiles ซึ่งมีเฉพาะพนักงาน ตรงกับ is_staff() ที่ RLS ใช้
+  if (store.mode === 'probing') return <Loading />
+
+  if (store.mode === 'live') {
+    if (store.profile === undefined) return <Loading label="กำลังตรวจสอบสิทธิ์…" />
+    if (store.profile === null) return <Login kind={kind} />
+  }
+
   const counts = {
     queue: store.queueTickets.filter((q) => q.status === 'waiting' || q.status === 'called').length,
     kitchen: store.kitchenTickets().reduce((n, t) => n + t.items.length, 0),
@@ -112,10 +148,17 @@ export function ConsoleLayout({ kind }) {
 
         <div className="side__foot">
           <div className="side__sep" />
-          <NavLink to="/">
-            <Icon name="logout" size={18} />
-            <span>ออกจากคอนโซล</span>
-          </NavLink>
+          {store.session ? (
+            <a href="/" onClick={(e) => { e.preventDefault(); store.signOut() }}>
+              <Icon name="logout" size={18} />
+              <span>ออกจากระบบ{store.profile?.full_name ? ` · ${store.profile.full_name}` : ''}</span>
+            </a>
+          ) : (
+            <NavLink to="/">
+              <Icon name="logout" size={18} />
+              <span>ออกจากคอนโซล</span>
+            </NavLink>
+          )}
         </div>
       </aside>
 
