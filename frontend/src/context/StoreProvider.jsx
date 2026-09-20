@@ -20,8 +20,37 @@ import * as api from '../api/mutations'
 
 const StoreCtx = createContext(null)
 
+/** เพดานเวลาต่อหนึ่งขั้นตอนตอนเปิดแอป — เกินแล้วถือว่าต่อไม่ติด ดีกว่าค้างเงียบ */
+const BOOT_TIMEOUT_MS = 12000
+
+function withTimeout(promise, label, ms = BOOT_TIMEOUT_MS) {
+  let timer
+  return Promise.race([
+    promise,
+    new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`${label}นานเกิน ${ms / 1000} วินาที — เช็คอินเทอร์เน็ตหรือสถานะ Supabase`)), ms)
+    }),
+  ]).finally(() => clearTimeout(timer))
+}
+
 /** สถานะของรอบที่ยังไม่ปิด — ตรงกับที่ queries.js กรอง และที่ RLS ยอมให้เห็น */
 const ACTIVE_VISIT = ['open', 'awaiting_payment', 'paid']
+
+/**
+ * ทางเข้าโต๊ะของเครื่องนี้ เก็บไว้ข้ามการรีเฟรช
+ *
+ * เดิม joinedVisitId อยู่ใน state ล้วน พอลูกค้ากด F5 หรือสลับแอปแล้วเครื่อง reload
+ * ค่านี้หายไป แล้วหน้าลูกค้าตกไปใช้ "visit ที่เปิดอยู่ใบแรก" = โต๊ะของคนอื่น
+ * ซึ่งบนมือถือจริงเกิดตลอด (pull-to-refresh, กลับมาจากแอปอื่น)
+ */
+const VISIT_KEY = 'shabu.visit'
+
+function readVisitKey() {
+  try { return JSON.parse(localStorage.getItem(VISIT_KEY) ?? 'null') } catch { return null }
+}
+function writeVisitKey(v) {
+  try { v ? localStorage.setItem(VISIT_KEY, JSON.stringify(v)) : localStorage.removeItem(VISIT_KEY) } catch { /* โหมดส่วนตัวบางเบราว์เซอร์เขียนไม่ได้ */ }
+}
 
 const initial = {
   tables: demo.tables,
@@ -188,7 +217,7 @@ function reducer(state, action) {
       return {
         ...state,
         menuItems: state.menuItems.map((m) =>
-          m.id === action.menuId ? { ...m, is_available: !m.is_available } : m),
+          m.id === action.menuId ? { ...m, is_available: action.next ?? !m.is_available } : m),
       }
 
     case 'TOAST':
@@ -206,8 +235,35 @@ export function StoreProvider({ children }) {
   const [mode, setMode] = useState('probing')
   const [conn, setConn] = useState({ status: 'idle', reason: null })
   const [reference, setReference] = useState(null)
+
+  // สำเนาล่าสุดของ reference ที่อ่านได้จากใน callback โดยไม่ติดค่าเก่า
+  //
+  // dispatch กับปุ่มบนหน้าจอถูกสร้างขึ้นในรอบ render หนึ่ง ๆ แล้วจำค่า ณ ตอนนั้นไว้
+  // พอกด 86 แล้วกดคืนติด ๆ กัน ปุ่มที่กดครั้งที่สองอาจยังถือค่าจากก่อนกดครั้งแรก
+  // แล้วคำนวณสถานะปลายทางผิด กลายเป็นสั่ง "ให้หมด" ซ้ำแทนที่จะคืนของ
+  const referenceRef = useRef(null)
+  useEffect(() => { referenceRef.current = reference }, [reference])
+
+  /**
+   * ตัวนับการเขียนข้อมูลอ้างอิงจากเครื่องนี้ — ใช้ทิ้งผลโหลดที่ล้าสมัย
+   *
+   * โหลดชุดอ้างอิงที่ยิงออกไปก่อนที่การอัปเดตจะ commit จะกลับมาพร้อมค่าเก่า
+   * ถ้าปล่อยให้เขียนทับ ปุ่ม 86/คืน จะสลับป้ายกลับไปมาเอง แล้วคนกดครั้งถัดไป
+   * โดนปุ่มที่ความหมายเปลี่ยนไปแล้ว (เห็นจริงใน audit log: ส่ง 86 ซ้ำสองครั้ง)
+   */
+  const refWrite = useRef(0)
+
+  /** โหลดชุดอ้างอิงใหม่ แล้วเขียนลง state เฉพาะเมื่อไม่มีการเขียนแทรกระหว่างรอ */
+  const refreshReference = useCallback(async () => {
+    const seq = refWrite.current
+    try {
+      const next = await loadReference()
+      if (refWrite.current === seq) setReference(next)
+    } catch { /* โหลดไม่ได้ก็ใช้ของเดิมต่อ ไม่ต้องทำทั้งหน้าดับ */ }
+  }, [])
   const [dash, setDash] = useState(demo.dashboard)
   const refreshing = useRef(false)
+  const pendingRefresh = useRef(false)
 
   // ── ตัวตน ─────────────────────────────────────────────────────────────────
   // session = ทั้งพนักงานที่ล็อกอิน และลูกค้าที่ได้ anonymous session จากการสแกน QR
@@ -226,21 +282,48 @@ export function StoreProvider({ children }) {
     return api.onAuthChange(setSession)
   }, [])
 
+  // ผูกกับ id ของผู้ใช้ ไม่ใช่ตัว session
+  //
+  // onAuthStateChange ส่ง object ใหม่ทุก event รวมถึง TOKEN_REFRESHED ที่ต่ออายุ token
+  // เองเป็นระยะ และ supabase-js ยัง sync event ข้าม tab ให้ด้วย
+  // ถ้าผูกกับ session ตรง ๆ effect จะวิ่งใหม่ทุกครั้งแล้วล้าง profile เป็น undefined
+  // ทั้งที่ตัวตนไม่ได้เปลี่ยน — คอนโซลกระพริบเป็น "กำลังตรวจสอบสิทธิ์…" เอง
+  // และจอคิวหน้าร้านที่เปิดค้างบนทีวีก็ดับเป็นหน้าโหลดตามไปด้วย
+  const authUserId = session?.user?.id ?? null
   useEffect(() => {
-    if (!session) { setProfile(null); return }
+    if (!authUserId) { setProfile(null); return }
     let alive = true
     setProfile(undefined)
     api.currentProfile()
       .then((p) => { if (alive) setProfile(p ?? null) })
       .catch(() => { if (alive) setProfile(null) })
     return () => { alive = false }
-  }, [session])
+  }, [authUserId])
 
   // ── ตรวจว่าฐานข้อมูลพร้อมไหม แล้วเลือกโหมด ────────────────────────────────
+  //
+  // ทุกขั้นตอนต้องมีเพดานเวลา ไม่งั้นถ้า Supabase ตอบช้าหรือติด rate limit
+  // หน้าจอจะค้างที่ "กำลังเชื่อมต่อ" ตลอดกาล — ลูกค้าในร้านจ้องจอเปล่าโดยไม่รู้ว่าเกิดอะไร
+  // เจอจริงตอนรัน E2E ที่เปิด context ใหม่ทุกเทสต์จนชน rate limit ของ anonymous sign-in
   useEffect(() => {
     let alive = true
+
+    // /q/:token (เช็คคิวด้วย QR บัตรคิว) อ่านผ่าน get_queue_status() ซึ่ง grant ให้ role
+    // anon เรียกตรงได้อยู่แล้ว (0011) ไม่ต้องมี session เลย — หน้านี้ไม่เคยเรียก useStore() ด้วยซ้ำ
+    // ถ้าปล่อยให้ boot flow รันเหมือนหน้าอื่น จะ signInAnonymously() สมัครบัญชีทิ้งไว้ให้ทุกคน
+    // ที่แค่มายืนเช็คคิว ไม่เคยได้ที่นั่งด้วยซ้ำ — บัญชีขยะโตวันละเท่าจำนวนคนเช็คคิว
+    if (window.location.pathname.startsWith('/q/')) return
+
     ;(async () => {
-      const probe = await probeSchema()
+      let probe
+      try {
+        probe = await withTimeout(probeSchema(), 'ตรวจสอบฐานข้อมูล')
+      } catch (e) {
+        if (!alive) return
+        setMode('demo')
+        setConn({ status: 'demo', reason: e.message })
+        return
+      }
       if (!alive) return
 
       if (!probe.ready) {
@@ -253,7 +336,7 @@ export function StoreProvider({ children }) {
       // ต้องมี session ก่อนโหลดข้อมูลอ้างอิง ไม่ใช่รอตอนลูกค้าสแกน QR
       // พนักงานที่ล็อกอินอยู่แล้วไม่กระทบ signInAnonymously คืน session เดิมให้
       try {
-        await api.signInAnonymously()
+        await withTimeout(api.signInAnonymously(), 'เข้าสู่ระบบผู้เยี่ยมชม')
       } catch (e) {
         if (!alive) return
         setMode('demo')
@@ -263,7 +346,7 @@ export function StoreProvider({ children }) {
       if (!alive) return
 
       try {
-        const ref = await loadReference()
+        const ref = await withTimeout(loadReference(), 'โหลดข้อมูลอ้างอิง')
         if (!alive) return
         setReference(ref)
         setMode('live')
@@ -291,32 +374,52 @@ export function StoreProvider({ children }) {
     let alive = true
     loadReference()
       .then((ref) => { if (alive) setReference(ref) })
-      .catch(() => {})
+      // เงียบไม่ได้ — พลาดตรงนี้คือคอนโซลกลับไปเป็น "0 โต๊ะ" โดยไม่มีอะไรบอก
+      .catch((e) => { if (alive) setConn({ status: 'error', reason: `โหลดข้อมูลอ้างอิงใหม่ไม่สำเร็จ: ${e.message}` }) })
     return () => { alive = false }
   }, [mode, staffId, joinedVisitId])
 
   // ── โหลดสถานะหน้าร้าน + ติดตาม realtime ───────────────────────────────────
+  // ตัวเลขแดชบอร์ดต้องโหลดคู่กันเสมอ ไม่งั้นเก็บเงินแล้วยอดขายยังเป็นของเก่าจนกว่าจะรีเฟรชหน้า
+  const tz = reference?.settings?.timezone ?? 'Asia/Bangkok'
   const refresh = useCallback(async () => {
-    if (refreshing.current) return
+    // มีรอบที่กำลังโหลดอยู่แล้ว — จดไว้ว่ามีคนขอเพิ่ม แล้วโหลดต่ออีกรอบเมื่อรอบนี้จบ
+    //
+    // ของเดิมทิ้งคำขอนั้นไปเลย ผลคือ event ที่มาถึงระหว่างกำลังโหลดอยู่จะหายไป
+    // เช่นเปิดโต๊ะจากอีกเครื่องพอดีกับที่จอนี้กำลังโหลดชุดก่อนหน้า
+    // ผังโต๊ะจะค้างเป็น "ว่าง" ทั้งที่ฐานข้อมูลเปลี่ยนแล้ว จนกว่าจะมี event ถัดไป
+    if (refreshing.current) { pendingRefresh.current = true; return }
     refreshing.current = true
     try {
-      const floor = await loadFloorState()
-      rawDispatch({ type: 'HYDRATE', data: floor })
-      setHydrated(true)
+      do {
+        pendingRefresh.current = false
+        const floor = await loadFloorState()
+        rawDispatch({ type: 'HYDRATE', data: floor })
+        setHydrated(true)
+        loadDashboard(tz).then(setDash).catch(() => {})
+      } while (pendingRefresh.current)
     } catch (e) {
       setConn({ status: 'error', reason: e.message })
     } finally {
       refreshing.current = false
     }
-  }, [])
+  }, [tz])
 
   useEffect(() => {
     if (mode !== 'live') return
     refresh()
-    loadDashboard(reference?.settings?.timezone).then(setDash).catch(() => {})
 
     const stop = subscribeFloor(
-      () => refresh(),
+      (info) => {
+        // เมนูอยู่ใน reference ไม่ใช่ floor state — กด 86 แล้วต้องโหลดชุดอ้างอิงใหม่
+        // ไม่งั้นมือถือลูกค้าที่เปิดค้างยังเห็นเมนูที่หมดไปแล้วจนกว่าจะ reload
+        //
+        // ห้ามโหลด reference ตอน resync: resync เกิดทุกครั้งที่ต่อ channel ใหม่
+        // และการโหลด reference ใหม่ก็ทำให้ต่อ channel ใหม่อีก กลายเป็นวนไม่จบ
+        // กรณีเน็ตหลุดแล้วเมนูเปลี่ยนระหว่างนั้น ใช้ตัวดักเหตุการณ์ online ข้างล่างแทน
+        if (info?.table === 'menu_items') refreshReference()
+        refresh()
+      },
       (status) => {
         if (status === 'SUBSCRIBED') setConn({ status: 'live', reason: null })
         else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
@@ -325,7 +428,34 @@ export function StoreProvider({ children }) {
       },
     )
     return stop
-  }, [mode, refresh, reference])
+    // reference อยู่ใน deps ทั้งที่ effect ไม่ได้ใช้ตรง ๆ — ตั้งใจให้เป็นแบบนี้
+    // เพราะการโหลด reference เสร็จคือจังหวะที่ต้อง refresh() ซ้ำอีกรอบ
+    // (รอบแรกยิงตั้งแต่ยังไม่มีข้อมูลอ้างอิง ถ้าพลาดแล้วไม่มีใครลองใหม่ให้)
+    // การวนซ้ำจากการ resync กันไว้ที่ subscribeFloor แล้ว — ดู realtime.js
+  }, [mode, refresh, reference, refreshReference])
+
+  // ── ตาข่ายรับ: เน็ตสะดุดสั้น ๆ แล้วกลับมา ────────────────────────────────
+  //
+  // Postgres Changes ไม่ส่ง event ย้อนหลัง ของที่เปลี่ยนตอนเน็ตหลุดจึงหายไปเลย
+  // ปกติจะกู้คืนตอน websocket ต่อกลับได้ (resync) แต่ถ้าเน็ตสะดุดสั้นจนซ็อกเก็ต
+  // ไม่ทันรู้ตัว จะไม่มี resync ให้เลย แล้วมือถือค้างอยู่กับข้อมูลเก่าตลอดไป
+  // ซึ่งเกิดตลอดเวลาบนมือถือจริง (เดินสลับ wifi กับ 4G, ล็อกจอแล้วกลับมาเปิด)
+  //
+  // จึงอาศัยสัญญาณของเบราว์เซอร์เองเป็นตัวกระตุ้นให้โหลดใหม่ ไม่ต้องพึ่ง realtime
+  useEffect(() => {
+    if (mode !== 'live') return
+
+    // ดักเฉพาะ online: เป็นสัญญาณที่ตรงกับเรื่องนี้ที่สุด และเกิดไม่บ่อย
+    // เคยดัก visibilitychange ด้วย แต่มันยิงบ่อยจนโหลดข้อมูลอ้างอิงใหม่ถี่เกินไป
+    // แล้วการโหลดใหม่แต่ละครั้งทำให้ต่อ channel ใหม่ event ช่วงนั้นเลยหายไปแทน
+    const catchUp = () => {
+      refresh()
+      refreshReference()
+    }
+
+    window.addEventListener('online', catchUp)
+    return () => window.removeEventListener('online', catchUp)
+  }, [mode, refresh, refreshReference])
 
   // ── dispatch เดียวใช้ได้ทั้งสองโหมด ───────────────────────────────────────
   // หน้าจอเรียก dispatch เหมือนเดิมทุกที่ ไม่ต้องรู้ว่าอยู่โหมดไหน
@@ -343,7 +473,7 @@ export function StoreProvider({ children }) {
           break
 
         case 'ADVANCE_ITEM':
-          await api.advanceOrderItem(action.itemId, action.next)
+          await api.advanceOrderItem(action.itemId, action.next, action.reason ?? null)
           break
 
         case 'BUMP_ORDER': {
@@ -400,9 +530,11 @@ export function StoreProvider({ children }) {
           // ยอดที่เชื่อได้คือของฐานข้อมูล ไม่ใช่ previewBill ฝั่งหน้าจอ
           // (previewBill มีไว้ "แสดง" ระหว่างกินเท่านั้น ตามที่ money.js เขียนไว้)
           const due = await api.amountDue(action.visitId)
+          // จ่ายแยกได้: หน้าจอส่งยอดมาเท่าไหร่ก็เก็บเท่านั้น แต่ห้ามเกินยอดคงเหลือ
+          const amount = Math.min(action.amount ?? due, due)
           const p = await api.createPayment({
             visitId: action.visitId, method: action.method,
-            amountSatang: due, tenderedSatang: action.tendered,
+            amountSatang: amount, tenderedSatang: action.tendered,
           })
           await api.confirmPayment(p.id)
           rawDispatch({ type: 'TOAST', toast: { kind: 'ok', text: 'ชำระเงินสำเร็จ — ออกใบเสร็จแล้ว' } })
@@ -419,13 +551,31 @@ export function StoreProvider({ children }) {
           break
 
         case 'TOGGLE_MENU': {
-          const m = state.menuItems.find((x) => x.id === action.menuId)
-          await api.setMenuAvailability(action.menuId, !m.is_available)
-          setReference((r) => ({
+          // โหมด live เมนูอยู่ใน reference ไม่ใช่ state — หยิบผิดที่แล้ว m เป็น undefined
+          //
+          // ต้องอ่านผ่าน referenceRef ไม่ใช่ตัวแปร reference ที่ฟังก์ชันนี้จับไว้ตอนถูกสร้าง
+          // ไม่งั้นกด 86 แล้วกดคืนติด ๆ กัน ค่าที่อ่านได้ยังเป็นค่าก่อนกดครั้งแรก
+          // แล้วคำนวณสถานะปลายทางผิด กลายเป็นสั่ง "ให้หมด" ซ้ำ เมนูไม่กลับมาสักที
+          const src = referenceRef.current?.menuItems ?? reference?.menuItems ?? state.menuItems
+          const m = src.find((x) => x.id === action.menuId)
+          if (!m && action.next == null) break
+
+          const next = action.next ?? !m.is_available
+
+          // นับการเขียนไว้ก่อนยิง เพื่อให้ผลโหลดชุดอ้างอิงที่ค้างอยู่ก่อนหน้าถูกทิ้ง
+          // ไม่งั้นมันจะกลับมาเขียนทับด้วยค่าก่อนกด แล้วปุ่มสลับป้ายกลับเอง
+          refWrite.current++
+          const saved = await api.setMenuAvailability(action.menuId, next)
+          refWrite.current++
+
+          // ใช้ค่าที่ฐานข้อมูลคืนกลับมา ไม่ใช่ค่าที่เราเดาไว้ — RPC คืนแถวที่อัปเดตแล้ว
+          const confirmed = saved?.is_available ?? next
+          // r เป็น null ได้ถ้ากดก่อนชุดอ้างอิงโหลดเสร็จ — ไม่มีอะไรให้แก้ ปล่อยผ่าน
+          setReference((r) => (r ? {
             ...r,
             menuItems: r.menuItems.map((x) =>
-              x.id === action.menuId ? { ...x, is_available: !x.is_available } : x),
-          }))
+              x.id === action.menuId ? { ...x, is_available: confirmed } : x),
+          } : r))
           break
         }
 
@@ -468,24 +618,70 @@ export function StoreProvider({ children }) {
     return v
   }, [refresh])
 
+  // โปรโมชั่นต้องคืน error ของฐานข้อมูลให้หน้าจอแสดงตรง ๆ (โค้ดผิด / นอกช่วงเวลา / ยอดไม่ถึง)
+  // dispatch คืนแค่ true/false จึงใช้ไม่ได้
+  const applyPromo = useCallback(async (visitId, code) => {
+    const v = await api.applyPromotionCode(visitId, code)
+    await refresh()
+    return v
+  }, [refresh])
+
+  const removePromo = useCallback(async (visitId, promotionId) => {
+    const v = await api.removePromotion(visitId, promotionId)
+    await refresh()
+    return v
+  }, [refresh])
+
+  // หน้าผู้จัดการแก้ราคา/เมนู/โต๊ะแล้วต้องเห็นผลทันทีทุกจอ โดยไม่ต้องรีเฟรชหน้า
+  const reloadReference = useCallback(async () => {
+    // ตัวนี้ผู้ใช้สั่งโหลดเองหลังบันทึกข้อมูล จึงถือว่าเป็นค่าล่าสุดเสมอ
+    // แต่ต้องนับเป็นการเขียนด้วย ไม่งั้นผลโหลดที่ค้างอยู่ก่อนหน้าจะมาเขียนทับทีหลัง
+    refWrite.current++
+    const ref = await loadReference()
+    setReference(ref)
+    return ref
+  }, [])
+
   const issueQueue = useCallback(async (input) => {
     const ticket = await api.issueQueueTicket(input)
     await refresh()
     return ticket
   }, [refresh])
 
-  const joinByToken = useCallback(async (token) => {
-    const visit = await api.joinVisit({ sessionToken: token })
+  // code = รหัส 6 หลักบนสลิป ใช้คู่กับ QR สติกเกอร์ติดโต๊ะ (tables.qr_token)
+  // ไม่มี code = QR บนสลิปซึ่งเป็น visits.session_token ใบเดียวต่อหนึ่งรอบ
+  const joinByToken = useCallback(async (token, code = null) => {
+    const visit = await api.joinVisit(
+      code ? { tableQrToken: token, accessCode: code } : { sessionToken: token })
     setJoinedVisitId(visit.id)
+    writeVisitKey({ token, code })
     await refresh()
     return visit
   }, [refresh])
+
+  // กลับเข้าโต๊ะเดิมหลังรีเฟรช — join_visit เป็น idempotent (visit_devices ใช้ on conflict)
+  // ล้มเหลวเมื่อไหร่ (ปิดบิลไปแล้ว / รหัสถูกล้าง) ทิ้ง key ไปเลย ไม่ต้องพยายามอีก
+  const rejoining = useRef(false)
+  useEffect(() => {
+    if (mode !== 'live' || joinedVisitId || rejoining.current) return
+    const saved = readVisitKey()
+    if (!saved?.token) return
+    rejoining.current = true
+    joinByToken(saved.token, saved.code ?? null)
+      .catch(() => writeVisitKey(null))
+      .finally(() => { rejoining.current = false })
+  }, [mode, joinedVisitId, joinByToken])
 
   // ── รวมข้อมูลให้หน้าจอใช้ — รูปทรงเดียวกันทั้งสองโหมด ─────────────────────
   const api_ = useMemo(() => {
     const live = mode === 'live' && reference
 
-    const tables = live ? reference.tables.map((t) => ({ ...t, zone: zoneCodeOf(t, reference) })) : state.tables
+    // โต๊ะของจริงมาจาก loadFloorState() ที่โหลดใหม่ทุกครั้งที่ realtime แจ้ง
+    // reference.tables เป็นค่าตั้งต้นระหว่างรอ HYDRATE รอบแรกเท่านั้น
+    const liveTables = live
+      ? (state.floorTables?.length ? state.floorTables : reference.tables)
+      : null
+    const tables = live ? liveTables.map((t) => ({ ...t, zone: zoneCodeOf(t, reference) })) : state.tables
     const menuItems = live ? reference.menuItems : state.menuItems
     const settings = live && reference.settings ? reference.settings : demo.settings
     const packages = live ? reference.packages : demo.packages
@@ -508,11 +704,14 @@ export function StoreProvider({ children }) {
     const activeVisitOf = (tableId) =>
       visits.find((v) => v.table_id === tableId && ACTIVE_VISIT.includes(v.status))
 
+    // ตั๋วของ visit ที่ปิดไปแล้วต้องไม่โผล่ที่จอครัวหรือหน้ารอเสิร์ฟ
+    // (เคยขึ้นเป็นตั๋วชื่อโต๊ะว่าง ๆ ที่ไม่มีใครเคลียร์ได้ เพราะโต๊ะถูกปล่อยคืนแล้ว)
     const kitchenTickets = () =>
       orders
         .map((o) => {
           const visit = visitOf(o.visit_id)
-          const table = visit && tableOf(visit.table_id)
+          if (!visit) return null
+          const table = tableOf(visit.table_id)
           const liveItems = o.items.filter((i) => i.status !== 'served' && i.status !== 'cancelled')
           return liveItems.length ? { ...o, items: liveItems, table, visit } : null
         })
@@ -522,7 +721,8 @@ export function StoreProvider({ children }) {
     const readyToServe = () =>
       orders.flatMap((o) => {
         const visit = visitOf(o.visit_id)
-        const table = visit && tableOf(visit.table_id)
+        if (!visit) return []
+        const table = tableOf(visit.table_id)
         return o.items.filter((i) => i.status === 'ready').map((i) => ({ ...i, order: o, table, visit }))
       })
 
@@ -541,9 +741,9 @@ export function StoreProvider({ children }) {
       return [...map.values()]
     }
 
-    // ฝั่งลูกค้า: ของจริงมาจาก /v/:token — ในเดโมหยิบโต๊ะที่เปิดอยู่ใบแรกมาแสดง
-    const customerVisitId = joinedVisitId
-      ?? (live ? (visits.find((v) => v.status === 'open')?.id ?? null) : demo.CUSTOMER_VISIT_ID)
+    // ฝั่งลูกค้า: ของจริงต้องมาจาก /v/:token เท่านั้น
+    // ห้าม fallback ไปโต๊ะที่เปิดอยู่ใบแรก — เครื่องที่ยังไม่ได้ join จะไปโผล่โต๊ะคนอื่น
+    const customerVisitId = joinedVisitId ?? (live ? null : demo.CUSTOMER_VISIT_ID)
 
     return {
       ...state,
@@ -558,9 +758,11 @@ export function StoreProvider({ children }) {
       refresh, dispatch,
       signInStaff: api.signInStaff,
       signOut: api.signOut,
-      joinByToken, issueQueue, seatTable, adjustGuests,
+      joinByToken, issueQueue, seatTable, adjustGuests, applyPromo, removePromo, reloadReference,
+      branchId: reference?.settings?.branch_id ?? null,
+      zones: live ? reference.zones : [],
     }
-  }, [state, mode, conn, reference, dash, refresh, dispatch, session, profile, joinedVisitId, joinByToken, issueQueue, seatTable, adjustGuests, hydrated])
+  }, [state, mode, conn, reference, dash, refresh, dispatch, session, profile, joinedVisitId, joinByToken, issueQueue, seatTable, adjustGuests, applyPromo, removePromo, reloadReference, hydrated])
 
   return <StoreCtx.Provider value={api_}>{children}</StoreCtx.Provider>
 }
@@ -574,6 +776,18 @@ export function useStore() {
   const ctx = useContext(StoreCtx)
   if (!ctx) throw new Error('useStore ต้องอยู่ภายใต้ <StoreProvider>')
   return ctx
+}
+
+/**
+ * คีย์ของตะกร้าเป็น "เมนู" หรือ "เมนู|ขนาด"
+ * ---------------------------------------------------------------------------
+ * เมนูเดียวกันคนละขนาดต้องนับแยกกัน ไม่งั้นลูกค้าสั่งเนื้อจานเล็กกับจานใหญ่
+ * แล้วได้เป็นจานเดียวกันสองที่ เครื่องหมาย | ใช้ได้เพราะ uuid ไม่มีอักขระตัวนี้
+ */
+export const cartKey = (menuId, size) => (size ? `${menuId}|${size}` : menuId)
+export function parseCartKey(key) {
+  const i = key.indexOf('|')
+  return i < 0 ? { menuId: key, size: null } : { menuId: key.slice(0, i), size: key.slice(i + 1) }
 }
 
 /** ตะกร้าอยู่ที่เครื่องใครเครื่องมัน แต่ออเดอร์ที่ส่งแล้วแชร์ทั้งโต๊ะ */
@@ -595,9 +809,10 @@ export function useCart() {
   const { settings } = useStore()
   const max = settings?.max_qty_per_item ?? 10
 
-  const add = useCallback((menuId) => setCart({ type: 'ADD', menuId, max }), [max])
-  const sub = useCallback((menuId) => setCart({ type: 'SUB', menuId }), [])
-  const remove = useCallback((menuId) => setCart({ type: 'REMOVE', menuId }), [])
+  // เรียกด้วย (menuId) เหมือนเดิมได้ ถ้าไม่ส่งขนาดมาคีย์ก็คือ menuId ตรง ๆ
+  const add = useCallback((menuId, size) => setCart({ type: 'ADD', menuId: cartKey(menuId, size), max }), [max])
+  const sub = useCallback((key) => setCart({ type: 'SUB', menuId: key }), [])
+  const remove = useCallback((key) => setCart({ type: 'REMOVE', menuId: key }), [])
   const clear = useCallback(() => setCart({ type: 'CLEAR' }), [])
 
   const lines = Object.entries(cart)

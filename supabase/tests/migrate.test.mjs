@@ -1,26 +1,11 @@
 import { PGlite } from '@electric-sql/pglite'
 import fs from 'fs'
 import path from 'path'
+import { MIGRATION_FILES, STORAGE_STUB } from './harness.mjs'
 
 const BASE = path.resolve(import.meta.dirname, '..')
 
-const FILES = [
-  'migrations/0001_extensions_enums.sql',
-  'migrations/0002_core_config.sql',
-  'migrations/0003_menu_packages.sql',
-  'migrations/0004_floor_queue.sql',
-  'migrations/0005_visits.sql',
-  'migrations/0006_orders.sql',
-  'migrations/0007_billing_payments.sql',
-  'migrations/0008_functions_rpc.sql',
-  'migrations/0009_rls_realtime.sql',
-  'migrations/0010_token_fallback.sql',
-  'migrations/0011_queue_tickets.sql',
-  'migrations/0012_scope_staff_rls_by_branch.sql',
-  'migrations/0013_align_remote_grants.sql',
-  'migrations/0014_queue_dashboard_and_guest_adjust.sql',
-  'seed.sql',
-]
+const FILES = MIGRATION_FILES
 
 // สิ่งที่มีเฉพาะบน Supabase — PGlite ไม่มีให้ ต้อง stub เอง
 const PRELUDE = `
@@ -31,6 +16,7 @@ create table if not exists auth.users (
 );
 create or replace function auth.uid() returns uuid language sql stable as $fn$ select null::uuid $fn$;
 create publication supabase_realtime;
+${STORAGE_STUB}
 `
 
 // บรรทัดที่ PGlite รันไม่ได้เพราะไม่มี role / extension เหล่านี้

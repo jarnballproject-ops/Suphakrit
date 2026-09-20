@@ -121,6 +121,29 @@ body::before {
 #root { position: relative; z-index: 2; }
 
 button, input, select, textarea { font: inherit; color: inherit; }
+
+/* ช่องกรอกที่ไม่ได้อยู่ใน .field ไม่เคยถูกตั้งพื้นหลัง จึงได้สีขาวจากเบราว์เซอร์
+   มาชนกับ color: inherit ซึ่งเป็นสีอ่อนของธีมมืด ผลคือขาวบนขาว อ่านค่าไม่ออก
+   และมองไม่ออกด้วยซ้ำว่ามีช่องให้กรอกหรือตัวเลือกให้กด
+
+   :where() ไม่เพิ่มค่าความจำเพาะ กฎนี้จึงยังเท่ากับตัวเลือกระดับ element
+   คลาสที่จัดสไตล์ช่องกรอกอยู่แล้ว เช่น .field input ยังชนะเหมือนเดิมทุกที่ */
+select,
+textarea,
+input:where(:not([type='checkbox'], [type='radio'], [type='submit'],
+                 [type='button'], [type='reset'], [type='file'],
+                 [type='range'], [type='color'])) {
+  background: var(--n900);
+  border: 1px solid var(--line-hi);
+  border-radius: var(--r-sm);
+  height: 34px;
+  padding: 0 10px;
+}
+select { cursor: pointer; }
+textarea { height: auto; padding: 8px 10px; }
+select:disabled, input:disabled, textarea:disabled { opacity: .55; cursor: default; }
+input::placeholder, textarea::placeholder { color: var(--n500); }
+option { background: var(--n900); color: var(--n50); }
 button { cursor: pointer; border: none; background: none; padding: 0; }
 a { color: inherit; text-decoration: none; }
 h1, h2, h3, h4, p { margin: 0; font-weight: inherit; }
@@ -874,3 +897,528 @@ table.data .num { text-align: right; font-variant-numeric: tabular-nums; }
   table.data th { background: #eee !important; color: #000 !important; }
   .chip { border-color: #999 !important; color: #000 !important; background: #f2f2f2 !important; }
 }
+
+
+/* ===========================================================================
+   สกิน "ออฟฟิศ" — ใช้กับทุกหน้าคอนโซลที่มีคลาส .body
+   ---------------------------------------------------------------------------
+   แนวคิด: เฟรมของแอปยังเป็นแถบมืดเหมือนแถบหัวหน้าต่างของ Word/Excel
+   แต่พื้นที่เนื้อหากลายเป็น "แผ่นเอกสาร" สีขาว อ่านง่าย ความหนาแน่นสูง
+   ไม่มีเงาฟุ้ง ไม่มีแสงเรือง เส้นคั่นบางหนึ่งพิกเซล มุมมน 2px
+
+   ตัวเน้นใช้น้ำเงินแบบ Word (#185abd) จุดเดียว สีที่เหลือสื่อสถานะล้วน
+   เขียวแบบ Excel = เสร็จ/ปกติ · ส้มอิฐแบบ PowerPoint = ต้องสนใจ
+
+   ทุกกฎในบล็อกนี้ขึ้นต้นด้วย .body จึงชนะกฎกลางด้วยความจำเพาะ
+   โดยไม่ต้องแก้ไฟล์กลางสักบรรทัด หน้าลูกค้า (.cx) และจอคิวหน้าร้านใช้คนละคลาส จึงไม่ถูกแตะ
+   =========================================================================== */
+
+.body {
+  --o-sheet:  #ffffff;   /* แผ่นเอกสาร */
+  --o-ground: #f3f2f1;   /* พื้นรองแผ่น */
+  --o-line:   #e1dfdd;   /* เส้นคั่นบาง */
+  --o-line-2: #c8c6c4;   /* เส้นเข้มขึ้น ใช้ใต้หัวตาราง */
+  --o-ink:    #201f1e;   /* ตัวอักษรหลัก */
+  --o-ink-2:  #605e5c;   /* ตัวอักษรรอง */
+  --o-ink-3:  #8a8886;   /* ป้ายกำกับ */
+  --o-accent: #185abd;   /* น้ำเงิน Word */
+  --o-ok:     #107c41;   /* เขียว Excel */
+  --o-warn:   #a26a00;
+  --o-alert:  #c43e1c;   /* ส้มอิฐ PowerPoint */
+
+  /* ── กลับด้านสเกลสีของธีมมืดภายในหน้าคอนโซล ───────────────────────────
+     นี่คือส่วนที่ทำให้สกินครอบได้จริงทั้งหน้า ไม่ใช่เฉพาะคลาสที่ไล่แก้ทีละตัว
+
+     ทั้งไฟล์มีคลาสหลายสิบตัวที่ตั้งพื้นหลังหรือสีตัวอักษรของตัวเองด้วยตัวแปร
+     ชุดนี้ เช่น .pay .tkt .sheet .step .tab การไล่เขียนทับทีละคลาสจะพลาดเสมอ
+     เพราะพลาดตัวไหนก็กลายเป็นกล่องมืดบนพื้นขาว อ่านไม่ออกทันที
+     และคลาสที่เพิ่มทีหลังจะพลาดโดยอัตโนมัติ
+
+     ประกาศค่าใหม่ให้ตัวแปรที่นี่แทน ทุกกฎที่อ้างถึงมันจึงกลายเป็นของสว่างพร้อมกัน
+     โดยไม่ต้องแตะกฎเดิมสักบรรทัด และหน้าลูกค้าซึ่งอยู่นอก .body ไม่ได้รับผลใด ๆ
+
+     หลักการจับคู่: n0–n200 เคยเป็นตัวอักษรบนพื้นมืด จึงกลายเป็นหมึกเข้ม
+     n300–n500 เคยเป็นตัวอักษรรอง จึงเป็นเทากลาง ส่วน n600 ขึ้นไปกับ s1–s3
+     เคยเป็นพื้นผิว จึงกลายเป็นพื้นสว่าง */
+  --n0:   #000000;
+  --n50:  #201f1e;
+  --n100: #201f1e;
+  --n200: #323130;
+  --n300: #605e5c;
+  --n400: #797775;
+  --n500: #8a8886;
+  --n600: #c8c6c4;
+  --n700: #201f1e;   /* ใช้เป็นสีตัวอักษรใน .empty ไม่ใช่พื้นผิว */
+  --n800: #ffffff;
+  --n900: #f3f2f1;
+
+  --s1: #ffffff;
+  --s2: #faf9f8;
+  --s3: #f3f2f1;
+  --line:    #e1dfdd;
+  --line-hi: #c8c6c4;
+
+  --brand:      #185abd;
+  --brand-soft: #eff4fb;
+  --danger:     #c43e1c;
+  --gold:       #a26a00;
+  --gold-soft:  #fdf6e7;
+  --gold-line:  #efdfb8;
+
+  --ok:   #107c41;  --ok-soft:   #eff6f1;  --ok-line:   #cfe6d9;
+  --warn: #a26a00;  --warn-soft: #fdf6e7;  --warn-line: #efdfb8;
+  --info: #185abd;  --info-soft: #eff4fb;  --info-line: #cddcf0;
+
+  /* เงาฟุ้งและแสงเรืองไม่มีที่ทางบนกระดาษ */
+  --sh-1: none;
+  --sh-2: 0 2px 6px rgba(0,0,0,.08);
+  --sh-3: 0 8px 24px rgba(0,0,0,.14);
+  --glow: 0 0 0 1px #185abd;
+
+  background: var(--o-ground);
+  color: var(--o-ink);
+  font-family: 'Segoe UI', 'Anuphan', -apple-system, system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.55;
+  padding: 18px 20px 40px;
+  min-height: 100%;
+}
+
+.body a { color: var(--o-accent); }
+.body a:hover { text-decoration: underline; }
+.body .muted { color: var(--o-ink-2); }
+.body .bold  { font-weight: 600; }
+.body .num   { font-variant-numeric: tabular-nums; font-feature-settings: 'tnum' 1; }
+
+/* หัวข้อกลุ่ม — เส้นบางใต้หัวเรื่องแบบสไตล์หัวข้อใน Word */
+.body .t-head {
+  font-size: 13px; font-weight: 600; letter-spacing: 0; color: var(--o-ink);
+}
+.body .t-label {
+  font-size: 11px; font-weight: 600; letter-spacing: .02em;
+  text-transform: none; color: var(--o-ink-3);
+}
+.body .t-sm { font-size: 13px; }
+.body .t-xs { font-size: 12px; color: var(--o-ink-2); }
+
+/* แผงเนื้อหา — แบนราบ เส้นเดียว ไม่มีเงา */
+.body .card,
+.body .tablewrap {
+  background: var(--o-sheet);
+  border: 1px solid var(--o-line);
+  border-radius: 2px;
+  box-shadow: none;
+}
+.body .pad { padding: 14px 16px; }
+
+/* ไทล์ตัวเลข — ป้ายเล็กด้านบน ตัวเลขหนาด้านล่าง ไม่มีแถบสีตกแต่ง */
+.body .stats { gap: 10px; }
+.body .stat {
+  background: var(--o-sheet);
+  border: 1px solid var(--o-line);
+  border-radius: 2px;
+  box-shadow: none;
+  padding: 12px 14px;
+  transition: background .12s, border-color .12s;
+}
+.body .stat::before { display: none; }
+.body a.stat:hover { background: #f8f8f7; border-color: var(--o-line-2); text-decoration: none; }
+.body .stat__v {
+  font-family: inherit;
+  font-size: 24px; font-weight: 600; line-height: 1.25;
+  color: var(--o-ink); letter-spacing: -.2px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ป้ายสถานะ — สี่เหลี่ยมมุมมนเล็ก พื้นอ่อน ตัวอักษรเข้ม อ่านได้ทุกอัน */
+.body .chip {
+  border-radius: 2px; font-size: 12px; font-weight: 600;
+  padding: 2px 8px; border: 1px solid transparent;
+}
+.body .chip--neutral { background: var(--o-ground); color: var(--o-ink-2); border-color: var(--o-line); }
+.body .chip--brand   { background: #fdf0ed;        color: var(--o-alert);  border-color: #f3cfc6; }
+.body .chip--ok      { background: #eff6f1;        color: var(--o-ok);     border-color: #cfe6d9; }
+.body .chip--warn    { background: #fdf6e7;        color: var(--o-warn);   border-color: #efdfb8; }
+.body .chip--info    { background: #eff4fb;        color: var(--o-accent); border-color: #cddcf0; }
+
+/* แถบสัดส่วน — รางเทาอ่อน แท่งทึบ ไม่มีเรืองแสง */
+.body .meter {
+  height: 6px; border-radius: 2px;
+  background: var(--o-ground); border: 1px solid var(--o-line);
+}
+.body .meter > i { background: var(--o-accent); box-shadow: none; }
+
+/* กราฟแท่ง — ทึบ ไม่ไล่สี พีคเน้นด้วยน้ำเงินเข้มไม่ใช่แสง */
+.body .bars .b {
+  background: #c7d9f0; border-radius: 2px 2px 0 0; box-shadow: none;
+}
+.body .bars > div:hover .b { background: #9dbde6; box-shadow: none; }
+.body .bars .b--peak { background: var(--o-accent); box-shadow: none; }
+.body .bars .x { color: var(--o-ink-3); }
+
+/* อันดับ — ตัวเลขลำดับเป็นกล่องเทาเรียบ ไม่ใช่เหรียญ */
+.body .rank { padding: 7px 0; border-bottom: 1px solid var(--o-line); }
+.body .rank:last-child { border-bottom: 0; }
+.body .rank__n {
+  background: var(--o-ground); color: var(--o-ink-2);
+  border: 1px solid var(--o-line); border-radius: 2px;
+  width: 22px; height: 22px; font-size: 11px; font-weight: 600;
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: none;
+}
+.body .rank:first-child .rank__n { background: #eff4fb; color: var(--o-accent); border-color: #cddcf0; }
+
+/* ตาราง — เส้นตารางแบบสเปรดชีต หัวตารางพื้นเทาอ่อน ตัวเลขชิดขวา */
+.body .tablewrap { border-radius: 2px; }
+.body .data { font-size: 13px; border-collapse: collapse; }
+.body .data th {
+  background: var(--o-ground); color: var(--o-ink-2);
+  font-size: 11px; font-weight: 600; letter-spacing: .02em; text-transform: none;
+  padding: 7px 12px; border-bottom: 1px solid var(--o-line-2);
+  position: sticky; top: 0;
+}
+.body .data td {
+  padding: 7px 12px; border-bottom: 1px solid var(--o-line); color: var(--o-ink);
+}
+.body .data tbody tr:hover td { background: #f8f8f7; }
+.body .data tbody tr:last-child td { border-bottom: 0; }
+.body .data .num { text-align: right; font-variant-numeric: tabular-nums; }
+
+/* ช่องกรอกในสกินนี้ต้องเป็นของสว่าง ไม่ใช่ของมืดจากกฎกลาง */
+.body select,
+.body textarea,
+.body input:where(:not([type='checkbox'], [type='radio'], [type='submit'],
+                          [type='button'], [type='reset'], [type='file'],
+                          [type='range'], [type='color'])) {
+  background: var(--o-sheet); color: var(--o-ink);
+  border: 1px solid var(--o-line-2); border-radius: 2px;
+}
+.body :is(select, input, textarea):focus-visible {
+  outline: 2px solid var(--o-accent); outline-offset: -1px; border-color: var(--o-accent);
+}
+.body a:focus-visible { outline: 2px solid var(--o-accent); outline-offset: 2px; }
+
+
+/* ── ปุ่ม ─────────────────────────────────────────────────────────────────
+   แบนราบ มุม 2px เส้นเดียว ไม่มีไล่เฉดและไม่ขยับตอนกด
+   ปุ่มหลักทึบสีน้ำเงิน ปุ่มรองขาวมีเส้น ปุ่มเงียบโปร่งใส — ลำดับเดียวกับ Office */
+.body .btn {
+  border-radius: 2px; font-weight: 600; font-size: 13px;
+  border: 1px solid transparent; box-shadow: none; height: 32px; padding: 0 14px;
+  transition: background .12s, border-color .12s;
+}
+.body .btn:active:not(:disabled) { transform: none; }
+.body .btn--sm { height: 28px; padding: 0 10px; font-size: 12px; }
+.body .btn--lg { height: 38px; padding: 0 20px; font-size: 14px; border-radius: 2px; }
+.body .btn--icon { width: 32px; padding: 0; }
+.body .btn--icon.btn--sm { width: 28px; }
+
+.body .btn--primary {
+  background: var(--o-accent); color: #fff; border-color: var(--o-accent);
+}
+.body .btn--primary:hover:not(:disabled) { background: #10459a; border-color: #10459a; }
+
+.body .btn--default {
+  background: var(--o-sheet); color: var(--o-ink); border-color: var(--o-line-2);
+}
+.body .btn--default:hover:not(:disabled) { background: var(--o-ground); color: var(--o-ink); border-color: #a19f9d; }
+
+.body .btn--quiet { background: transparent; color: var(--o-ink-2); }
+.body .btn--quiet:hover:not(:disabled) { background: var(--o-ground); color: var(--o-ink); }
+
+.body .btn--gold { background: var(--o-warn); color: #fff; border-color: var(--o-warn); }
+.body .btn--gold:hover:not(:disabled) { background: #8a5a00; }
+.body .btn:focus-visible { outline: 2px solid var(--o-accent); outline-offset: 1px; }
+
+/* ── ฟอร์ม ────────────────────────────────────────────────────────────────
+   ป้ายกำกับอยู่เหนือช่อง ตัวเล็กสีเทา ไม่ใช้ตัวพิมพ์ใหญ่ทั้งหมด
+   เพราะข้อความไทยไม่มีตัวพิมพ์ใหญ่ ระยะห่างตัวอักษรที่เพิ่มมาจึงแค่ทำให้อ่านช้าลง */
+.body .field { margin-bottom: 12px; }
+.body .field > span {
+  font-size: 11px; font-weight: 600; letter-spacing: 0; text-transform: none;
+  color: var(--o-ink-2); margin-bottom: 4px;
+}
+.body .field input, .body .field select, .body .field textarea {
+  height: 32px; padding: 0 10px; border-radius: 2px;
+  background: var(--o-sheet); color: var(--o-ink); border: 1px solid var(--o-line-2);
+}
+.body .field textarea { height: auto; padding: 7px 10px; }
+.body .field input:focus, .body .field select:focus, .body .field textarea:focus {
+  outline: none; border-color: var(--o-accent); box-shadow: 0 0 0 1px var(--o-accent);
+}
+.body .field input::placeholder { color: var(--o-ink-3); }
+.body .field select {
+  background-image: linear-gradient(45deg, transparent 50%, var(--o-ink-2) 50%),
+                    linear-gradient(135deg, var(--o-ink-2) 50%, transparent 50%);
+  background-position: calc(100% - 15px) 14px, calc(100% - 10px) 14px;
+}
+
+/* ── กล่องข้อความแจ้ง ─────────────────────────────────────────────────────
+   แถบสีด้านซ้ายบอกระดับ พื้นอ่อน ตัวอักษรเข้ม อ่านได้โดยไม่ต้องเพ่ง */
+.body .note {
+  border-radius: 2px; border: 1px solid var(--o-line);
+  border-left: 3px solid var(--o-ink-3); background: var(--o-ground); color: var(--o-ink);
+}
+.body .note--warn { background: #fdf6e7; border-color: #efdfb8; border-left-color: var(--o-warn); color: #5c3d00; }
+.body .note--info { background: #eff4fb; border-color: #cddcf0; border-left-color: var(--o-accent); color: #10345f; }
+.body .note--ok   { background: #eff6f1; border-color: #cfe6d9; border-left-color: var(--o-ok);   color: #0a4f2a; }
+
+/* ── หน้าต่างซ้อน ─────────────────────────────────────────────────────────
+   หัวหน้าต่างเป็นแถบเทาอ่อนมีตัวอักษรเข้ม ไม่ใช่แถบสีแบรนด์ตัวหนังสือขาว
+   กฎเดิมใส่ !important ไว้ จึงต้องชนะด้วยความจำเพาะที่สูงกว่า */
+.body .sheet { background: rgba(0,0,0,.42); backdrop-filter: none; }
+.body .sheet__box {
+  background: var(--o-sheet); border: 1px solid var(--o-line-2);
+  border-radius: 2px; box-shadow: 0 8px 24px rgba(0,0,0,.18);
+}
+.body .sheet__hd {
+  background: var(--o-ground); color: var(--o-ink);
+  border-bottom: 1px solid var(--o-line);
+}
+.body .sheet__hd .muted, .body .sheet__hd .t-xs { color: var(--o-ink-2) !important; }
+.body .sheet__hd .btn--quiet { color: var(--o-ink-2); }
+.body .sheet__hd .btn--quiet:hover { background: #e6e4e2; color: var(--o-ink); }
+.body .sheet__ft { background: var(--o-ground); border-top: 1px solid var(--o-line); }
+
+/* ── สถานะว่างเปล่า ───────────────────────────────────────────────────────
+   สำคัญกับคนที่ไม่ได้ใช้คอมพิวเตอร์เป็นอาชีพ — จอว่างต้องบอกว่าว่างเพราะอะไร
+   ไม่ใช่ปล่อยให้เดาว่าโหลดไม่ขึ้นหรือระบบพัง */
+.body .empty { color: var(--o-ink-2); padding: 40px 20px; }
+.body .empty__ico {
+  background: var(--o-ground); color: var(--o-ink-3);
+  border: 1px solid var(--o-line); border-radius: 2px;
+}
+
+/* ── หัวเรื่องในหน้า ──────────────────────────────────────────────────────── */
+.body .t-title { font-family: inherit; font-size: 15px; font-weight: 600; color: var(--o-ink); letter-spacing: 0; }
+
+/* ── ตั๋วครัว / การ์ดงาน ──────────────────────────────────────────────────── */
+.body .kds { gap: 10px; }
+.body .tkt, .body .tcard, .body .panel {
+  background: var(--o-sheet); border: 1px solid var(--o-line);
+  border-radius: 2px; box-shadow: none; color: var(--o-ink);
+}
+
+/* ── เส้นคั่นทั่วไป ───────────────────────────────────────────────────────── */
+.body hr, .body .sep { border: 0; border-top: 1px solid var(--o-line); }
+
+
+/* ── สลับมุมมอง ลิสต์ / กริด ──────────────────────────────────────────────
+   ปุ่มคู่ติดกันแบบแถบเครื่องมือ ปุ่มที่เลือกอยู่จมลงไป ไม่ใช่แค่เปลี่ยนสี
+   คนที่ไม่ได้ใช้คอมเป็นอาชีพอ่าน "จม = กำลังใช้อยู่" ได้เร็วกว่าอ่านจากสี */
+.body .viewtoggle { display: inline-flex; border: 1px solid var(--o-line-2); border-radius: 2px; overflow: hidden; }
+.body .viewtoggle button {
+  display: inline-flex; align-items: center; gap: 6px;
+  height: 30px; padding: 0 12px; font-size: 12px; font-weight: 600;
+  background: var(--o-sheet); color: var(--o-ink-2); border: 0; cursor: pointer;
+}
+.body .viewtoggle button + button { border-left: 1px solid var(--o-line-2); }
+.body .viewtoggle button:hover { background: var(--o-ground); color: var(--o-ink); }
+.body .viewtoggle button.on { background: #e5eefa; color: var(--o-accent); box-shadow: inset 0 1px 2px rgba(0,0,0,.09); }
+.body .viewtoggle button:focus-visible { outline: 2px solid var(--o-accent); outline-offset: -2px; }
+
+/* ── มุมมองกริดของเมนู ─────────────────────────────────────────────────── */
+.body .mgrid {
+  display: grid; gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(196px, 1fr));
+}
+.body .mcard {
+  display: flex; flex-direction: column;
+  background: var(--o-sheet); border: 1px solid var(--o-line); border-radius: 2px;
+}
+.body .mcard--off { opacity: .6; }
+.body .mcard__ph {
+  position: relative; display: block; width: 100%; aspect-ratio: 4 / 3;
+  background: var(--o-ground); border: 0; border-bottom: 1px solid var(--o-line);
+  padding: 0; cursor: pointer; overflow: hidden;
+}
+.body .mcard__ph img { width: 100%; height: 100%; object-fit: cover; }
+.body .mcard__ph > div { width: 100%; height: 100%; background: var(--o-ground) !important; }
+.body .mcard__noph {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: var(--o-ink-3);
+}
+.body .mcard__ph:hover .mcard__noph { color: var(--o-accent); }
+.body .mcard__bd { padding: 10px 12px; }
+.body .mcard__ft { display: flex; gap: 6px; padding: 0 12px 12px; margin-top: auto; }
+
+/* ── รูปย่อในตาราง — กดเพื่อเปิดฟอร์มเปลี่ยนรูป ─────────────────────────── */
+.body .thumb {
+  position: relative; width: 44px; height: 34px; padding: 0; cursor: pointer;
+  background: var(--o-ground); border: 1px solid var(--o-line); border-radius: 2px;
+  overflow: hidden; display: flex; align-items: center; justify-content: center;
+  color: var(--o-ink-3);
+}
+.body .thumb img { width: 100%; height: 100%; object-fit: cover; }
+.body .thumb > div { width: 100%; height: 100%; background: var(--o-ground) !important; }
+.body .thumb:hover { border-color: var(--o-accent); color: var(--o-accent); }
+
+/* ── แถวเลือกรูปในฟอร์ม ───────────────────────────────────────────────── */
+.body .imgpick {
+  display: flex; gap: 14px; align-items: flex-start;
+  padding-bottom: 14px; margin-bottom: 14px; border-bottom: 1px solid var(--o-line);
+}
+.body .imgpick__ph {
+  width: 116px; height: 87px; flex: none; object-fit: cover;
+  background: var(--o-ground); border: 1px solid var(--o-line); border-radius: 2px;
+}
+
+
+/* ── ปุ่มเลือกขนาดจานฝั่งลูกค้า ─────────────────────────────────────────────
+   อยู่ใต้ชื่อเมนูในแถวเดียวกัน ไม่ใช่ในหน้าต่างซ้อน
+   ปุ่มสูง 30px กว้างพอให้นิ้วโป้งกดโดนตอนถือมือถือข้างหม้อที่กำลังเดือด
+   ตัวเลขมุมปุ่มบอกว่าขนาดนั้นอยู่ในตะกร้ากี่ที่แล้ว จะได้ไม่ต้องเปิดตะกร้าดู */
+.sizes { display: flex; gap: 6px; margin-top: 8px; }
+.sizes button {
+  position: relative; min-width: 56px; height: 30px; padding: 0 12px;
+  font-size: 13px; font-weight: 600; cursor: pointer;
+  color: var(--n200); background: var(--s2);
+  border: 1px solid var(--line-hi); border-radius: var(--r-sm);
+  transition: background .14s, border-color .14s, color .14s;
+}
+.sizes button:hover { border-color: var(--e700); color: var(--n50); }
+.sizes button.on {
+  background: var(--brand-soft); border-color: var(--e600); color: var(--e300);
+}
+.sizes button:focus-visible { outline: 2px solid var(--e500); outline-offset: 2px; }
+.sizes__n {
+  position: absolute; top: -6px; right: -6px; min-width: 18px; height: 18px;
+  padding: 0 4px; border-radius: 99px;
+  background: var(--e500); color: #fff;
+  font-size: 10.5px; font-weight: 700; line-height: 18px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── กรอบสแกน QR ─────────────────────────────────────────────────────────
+   ภาพจากกล้องเต็มกรอบสี่เหลี่ยมจัตุรัส มีกรอบมุมบอกว่าเล็งตรงไหน
+   ไม่ใส่แอนิเมชันเส้นกวาด เพราะมันบอกอะไรไม่ได้จริงและกินแบตตอนกล้องเปิดค้าง */
+.scanbox {
+  position: relative; width: 100%; aspect-ratio: 1 / 1;
+  background: #000; border: 1px solid var(--line);
+  border-radius: var(--r-lg); overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.scanbox video { width: 100%; height: 100%; object-fit: cover; }
+.scanbox__frame {
+  position: absolute; inset: 14%;
+  border-radius: var(--r-md);
+  box-shadow: 0 0 0 100vmax rgba(0,0,0,.38);
+  outline: 2px solid rgba(255,255,255,.9);
+  outline-offset: -2px;
+}
+.scanbox__hint {
+  position: absolute; color: var(--n300); font-size: 13.5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sizes button { transition: none; }
+}
+
+
+/* ── แท็บกรอง (สถานีครัว / หมวด) ในคอนโซล ────────────────────────────────
+   สี่เหลี่ยมมุม 2px ไม่ใช่เม็ดยา อันที่เลือกทึบสีน้ำเงิน
+   เลือกพื้นทึบเพราะอ่านได้จากระยะไกลกว่าการเปลี่ยนแค่สีตัวอักษร
+   ซึ่งสำคัญกับจอครัวที่คนมองจากอีกฝั่งเคาน์เตอร์ */
+.body .tab {
+  height: 30px; padding: 0 12px; border-radius: 2px;
+  font-size: 12.5px; font-weight: 600;
+  background: var(--o-sheet); color: var(--o-ink-2);
+  border: 1px solid var(--o-line-2); transition: background .12s, color .12s;
+}
+.body .tab:hover { background: var(--o-ground); color: var(--o-ink); border-color: #a19f9d; }
+.body .tab--on {
+  background: var(--o-accent); color: #fff; border-color: var(--o-accent); box-shadow: none;
+}
+.body .tab:focus-visible { outline: 2px solid var(--o-accent); outline-offset: 1px; }
+
+/* ── ใบสั่งบนจอครัว ───────────────────────────────────────────────────────
+   หัวใบเป็นแถบเทาอ่อนตัวหนังสือเข้ม เหมือนหัวตารางในสเปรดชีต
+   ใบที่รอนานเปลี่ยนเป็นแถบสีเตือน และยังคงกระพริบเมื่อสายจริง
+   เพราะจอครัวต้องสะดุดตาจากอีกฝั่งห้อง ไม่ใช่ต้องเดินมาอ่าน */
+.body .tkt {
+  background: var(--o-sheet); border: 1px solid var(--o-line);
+  border-radius: 2px; box-shadow: none;
+}
+.body .tkt__hd {
+  background: var(--o-ground); color: var(--o-ink);
+  border-bottom: 1px solid var(--o-line-2);
+  padding: 9px 12px;
+}
+.body .tkt__hd .muted, .body .tkt__hd .t-xs { color: var(--o-ink-2); }
+
+.body .tkt__hd--aging {
+  background: #fdf6e7; color: #5c3d00;
+  border-bottom-color: #e0bf6a; box-shadow: inset 3px 0 0 var(--o-warn);
+}
+.body .tkt__hd--aging .muted, .body .tkt__hd--aging .t-xs { color: #7a5400; }
+
+.body .tkt__hd--late {
+  background: #fdecea; color: #8a1f10;
+  border-bottom-color: #e8a99d; box-shadow: inset 3px 0 0 var(--o-alert);
+  animation: officeLate 1.9s ease-in-out infinite;
+}
+.body .tkt__hd--late .muted, .body .tkt__hd--late .t-xs { color: #a3382a; }
+@keyframes officeLate {
+  0%, 100% { background: #fdecea; }
+  50%      { background: #f8d7d1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .body .tkt__hd--late { animation: none; border-bottom-width: 2px; }
+}
+
+.body .tkt__row { padding: 9px 12px; }
+.body .tkt__row + .tkt__row { border-top: 1px solid var(--o-line); }
+.body .tkt__q {
+  min-width: 28px; height: 28px; border-radius: 2px;
+  background: #eff4fb; color: var(--o-accent); border: 1px solid #cddcf0;
+  font-family: inherit; font-size: 14px; font-weight: 700;
+}
+.body .tkt__ft {
+  background: var(--o-ground); border-top: 1px solid var(--o-line); padding: 10px 12px;
+}
+
+/* ── การ์ดโต๊ะในผังโต๊ะ ───────────────────────────────────────────────────
+   สถานะเดิมสื่อด้วยแสงเรืองที่ขอบซ้าย ซึ่งหายไปบนพื้นสว่าง
+   เปลี่ยนเป็นแถบสีทึบกว้าง 3px อ่านออกทั้งบนจอสว่างและจอมืด */
+.body .tcard {
+  background: var(--o-sheet); border: 1px solid var(--o-line);
+  border-radius: 2px; box-shadow: none; color: var(--o-ink);
+}
+.body .tcard:hover { transform: none; box-shadow: none; border-color: var(--o-line-2); }
+.body .tcard::before { box-shadow: none !important; width: 3px; }
+.body .tcard--available::before { background: var(--o-ok) !important; }
+.body .tcard--occupied::before  { background: var(--o-accent) !important; }
+.body .tcard--cleaning::before  { background: var(--o-warn) !important; }
+.body .tcard--reserved::before  { background: var(--o-ink-3) !important; }
+.body .tcard--occupied, .body .tcard--cleaning { background: var(--o-sheet); }
+.body .tcard__no { font-family: inherit; font-size: 22px; font-weight: 600; letter-spacing: 0; }
+
+
+/* ── ค่าที่เขียนเป็นเลขฐานสิบหกตรง ๆ ไม่ได้ผ่านตัวแปร จึงต้องเขียนทับเอง ──── */
+.body .pay {
+  background: var(--o-sheet); border: 1px solid var(--o-line-2);
+  border-radius: 2px; box-shadow: none;
+}
+.body .pay:hover { background: var(--o-ground); border-color: #a19f9d; }
+.body .pay--on {
+  background: #eff4fb; border-color: var(--o-accent);
+  box-shadow: inset 3px 0 0 var(--o-accent);
+}
+.body .pay__ico {
+  background: var(--o-ground); color: var(--o-ink-2);
+  border: 1px solid var(--o-line); border-radius: 2px; box-shadow: none;
+}
+.body .pay--on .pay__ico { background: var(--o-accent); color: #fff; border-color: var(--o-accent); }
+.body .pay__check { color: var(--o-accent); }
+
+.body .step { background: var(--o-sheet); border-color: var(--o-line-2); border-radius: 2px; }
+.body .step button { color: var(--o-accent); }
+.body .step button:hover:not(:disabled) { background: var(--o-ground); }
+.body .step--on { border-color: var(--o-accent); }
+
+.body .tcard--occupied, .body .tcard--cleaning { background: var(--o-sheet) !important; }
+.body .tkt__hd { background: var(--o-ground) !important; }
+.body .chip--brand { background: #fdf0ed; color: var(--o-alert); border-color: #f3cfc6; }
+
+/* ใบเสร็จยังเป็นกระดาษของมันเอง ไม่ต้องแตะ — แต่เส้นประต้องไม่จางหายบนพื้นขาว */
+.body .slip__r { border-top-color: #b9a894; }

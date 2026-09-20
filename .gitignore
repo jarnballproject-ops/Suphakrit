@@ -31,3 +31,13 @@ shabu-install.sql
 # Playwright MCP artifacts + temp
 .playwright-mcp/
 *.tmp
+
+# Playwright E2E output
+e2e/test-results/
+e2e/playwright-report/
+# session ผู้เยี่ยมชมที่ global-setup สร้าง — มี token อยู่ข้างใน
+e2e/support/anon-state.json
+e2e/blob-report/
+
+# สถานะ link ของ Supabase CLI — เฉพาะเครื่อง ไม่ต้องขึ้น repo
+supabase/.temp/

@@ -1,18 +1,43 @@
+import { Link, useLocation } from 'react-router-dom'
 import { useStore } from '../../context/StoreProvider'
 import { TopBar } from '../../components/layout/Layouts'
 import { Chip } from '../../components/shared/Bits'
 import Icon from '../../components/ui/Icon'
+import * as admin from '../../api/admin'
+import { useRows } from './Ops'
+import { VISIT_STATUS } from '../../data/constants'
 import { baht, previewBill } from '../../utils/money'
+import { mockAggregates, mockQueueTally, mockWorkload, mockLive } from './mockDashboard'
 
 export default function AdminDashboard() {
   const store = useStore()
-  const d = store.dashboard
+  // /admin?mock=1 — ดูหน้าตาตอนร้านมีข้อมูลเยอะ โดยไม่ต้องแตะฐานข้อมูลจริง
+  // ที่อยู่ปกติไม่เปลี่ยนพฤติกรรมเลยสักอย่าง
+  const mock = new URLSearchParams(useLocation().search).has('mock')
+  const d = mock ? mockAggregates : store.dashboard
+  const tz = store.settings?.timezone ?? 'Asia/Bangkok'
 
-  const occupied = store.tables.filter((t) => t.status === 'occupied').length
-  const free = store.tables.filter((t) => t.status === 'available').length
+  // คิวทั้งวันไม่ได้อยู่ใน store (store เก็บเฉพาะที่ยังรออยู่) — ผู้จัดการต้องเห็น no-show ด้วย
+  const { rows: queue } = useRows(() => admin.listQueueToday(tz), [tz])
+  const realTally = (queue ?? []).reduce((a, q) => ({ ...a, [q.status]: (a[q.status] ?? 0) + 1 }), {})
+  const qTally = mock ? mockQueueTally : realTally
+
+  // งานค้างของแต่ละสถานี — เห็นทันทีว่าครัวไหนเป็นคอขวด
+  const realWorkload = store.stations.map((s) => {
+    const items = store.kitchenTickets().flatMap((t) => t.items).filter((i) => i.station_id === s.id)
+    return {
+      station: s,
+      pending: items.filter((i) => i.status === 'pending').length,
+      preparing: items.filter((i) => i.status === 'preparing').length,
+      ready: items.filter((i) => i.status === 'ready').length,
+    }
+  })
+  const workload = mock ? mockWorkload(store.stations) : realWorkload
+  const busiest = Math.max(1, ...workload.map((w) => w.pending + w.preparing))
+
   const peak = Math.max(...d.hourly.map((h) => h.v))
 
-  const live = store.tables.map((t) => {
+  const realLive = store.tables.map((t) => {
     const v = store.activeVisitOf(t.id)
     if (!v) return { table: t, total: 0, guests: 0, visit: null }
     const bill = previewBill({
@@ -21,7 +46,13 @@ export default function AdminDashboard() {
     })
     return { table: t, total: bill.total, guests: v.adult_count + v.child_count, visit: v }
   })
+  const live = mock ? mockLive(store.tables) : realLive
   const liveTotal = live.reduce((n, r) => n + r.total, 0)
+
+  const occupied = mock
+    ? live.filter((r) => r.visit).length
+    : store.tables.filter((t) => t.status === 'occupied').length
+  const free = store.tables.length - occupied
 
   const today = new Date().toLocaleDateString('th-TH', { day: 'numeric', month: 'long', year: 'numeric' })
 
@@ -33,10 +64,47 @@ export default function AdminDashboard() {
 
       <div className="body">
         <div className="stats">
-          <Stat label="ยอดขายวันนี้" value={baht(d.salesTodaySatang)} hint={`${d.billsToday} บิล`} />
-          <Stat label="ลูกค้าวันนี้" value={`${d.guestsToday} คน`} hint={`เฉลี่ย ${baht(d.avgPerHeadSatang)} ต่อท่าน`} />
-          <Stat label="โต๊ะกำลังใช้งาน" value={`${occupied} / ${store.tables.length}`} hint={`ว่าง ${free} โต๊ะ`} />
-          <Stat label="ยอดค้างในร้าน" value={baht(liveTotal)} hint="รวมทุกโต๊ะที่ยังไม่ปิดบิล" />
+          <Stat label="ยอดขายวันนี้" value={baht(d.salesTodaySatang)} hint={`${d.billsToday} บิล`} to="/admin/bills" />
+          <Stat label="ลูกค้าวันนี้" value={`${d.guestsToday} คน`} hint={`เฉลี่ย ${baht(d.avgPerHeadSatang)} ต่อท่าน`} to="/admin/visits" />
+          <Stat label="โต๊ะกำลังใช้งาน" value={`${occupied} / ${store.tables.length}`} hint={`ว่าง ${free} โต๊ะ`} to="/admin/tables" />
+          <Stat label="ยอดค้างในร้าน" value={baht(liveTotal)} hint="รวมทุกโต๊ะที่ยังไม่ปิดบิล" to="/admin/visits" />
+        </div>
+
+        <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(288px, 1fr))', marginTop: 16 }}>
+          <div className="card pad">
+            <div className="between" style={{ marginBottom: 12 }}>
+              <h3 className="t-head">คิววันนี้</h3>
+              <Link className="t-xs" to="/admin/queue">ดูทั้งหมด</Link>
+            </div>
+            <div className="row g8 wrap">
+              <Chip tone="warn">รออยู่ {qTally.waiting ?? 0}</Chip>
+              <Chip tone="info">เรียกแล้ว {qTally.called ?? 0}</Chip>
+              <Chip tone="ok">จัดโต๊ะแล้ว {qTally.seated ?? 0}</Chip>
+              <Chip tone="brand">ไม่มาตามเรียก {qTally.no_show ?? 0}</Chip>
+              <Chip tone="neutral">ยกเลิก {qTally.cancelled ?? 0}</Chip>
+            </div>
+          </div>
+
+          <div className="card pad">
+            <div className="between" style={{ marginBottom: 12 }}>
+              <h3 className="t-head">งานค้างของครัว</h3>
+              <span className="t-xs muted">รอรับ / กำลังทำ</span>
+            </div>
+            {workload.map((w) => (
+              <div key={w.station.id} style={{ marginBottom: 10 }}>
+                <div className="between t-sm" style={{ marginBottom: 4 }}>
+                  <span className="trunc">{w.station.name}</span>
+                  <span className="num bold">{w.pending} / {w.preparing}</span>
+                </div>
+                <div className="meter">
+                  <i style={{
+                    width: `${((w.pending + w.preparing) / busiest) * 100}%`,
+                    background: w.pending + w.preparing >= busiest && busiest > 1 ? 'var(--danger)' : 'var(--brand)',
+                  }} />
+                </div>
+              </div>
+            ))}
+          </div>
         </div>
 
         <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'minmax(0,1.4fr) minmax(0,1fr)', marginTop: 18 }}>
@@ -100,7 +168,8 @@ export default function AdminDashboard() {
                 <tr key={r.table.id}>
                   <td><b>{r.table.table_number}</b></td>
                   <td className="muted">
-                    {r.visit ? 'กำลังใช้งาน' : r.table.status === 'cleaning' ? 'รอทำความสะอาด' : 'ว่าง'}
+                    {r.visit ? VISIT_STATUS[r.visit.status].label
+                      : r.table.status === 'cleaning' ? 'รอทำความสะอาด' : 'ว่าง'}
                   </td>
                   <td className="muted">{r.visit?.package_name_snapshot ?? '—'}</td>
                   <td className="num">{r.guests || '—'}</td>
@@ -116,14 +185,18 @@ export default function AdminDashboard() {
   )
 }
 
-function Stat({ label, value, hint }) {
-  return (
-    <div className="stat">
+/** การ์ดตัวเลข — มี to = กดแล้ว drill-down ไปหน้ารายละเอียดของตัวเลขนั้น */
+function Stat({ label, value, hint, to }) {
+  const body = (
+    <>
       <p className="t-label">{label}</p>
       <p className="stat__v">{value}</p>
       <p className="t-xs muted">{hint}</p>
-    </div>
+    </>
   )
+  return to
+    ? <Link className="stat" to={to} style={{ display: 'block', color: 'inherit', textDecoration: 'none' }}>{body}</Link>
+    : <div className="stat">{body}</div>
 }
 
 function Split({ title, rows }) {
