@@ -134,6 +134,9 @@ input:where(:not([type='checkbox'], [type='radio'], [type='submit'],
                  [type='button'], [type='reset'], [type='file'],
                  [type='range'], [type='color'])) {
   background: var(--n900);
+  /* ต้องตั้ง color คู่กับ background เสมอ ปล่อยให้ inherit เมื่อไหร่คือเสี่ยง
+     ข้อความสีเดียวกับพื้นทันทีที่ตัวแม่เปลี่ยนสกิน */
+  color: var(--n50);
   border: 1px solid var(--line-hi);
   border-radius: var(--r-sm);
   height: 34px;
@@ -141,9 +144,25 @@ input:where(:not([type='checkbox'], [type='radio'], [type='submit'],
 }
 select { cursor: pointer; }
 textarea { height: auto; padding: 8px 10px; }
-select:disabled, input:disabled, textarea:disabled { opacity: .55; cursor: default; }
+
+/* opacity ทำให้ทั้งกล่องจางจนดูเหมือนบล็อกตัน ไม่รู้ว่ายังเป็นช่องกรอกอยู่
+   ใช้สีพื้นกับสีอักษรที่ตั้งใจแทน ยังอ่านค่าเดิมออกและยังรู้ว่าแก้ไม่ได้ */
+select:disabled, input:disabled, textarea:disabled {
+  background: var(--n800);
+  color: var(--n400);
+  border-color: var(--line);
+  cursor: not-allowed;
+  opacity: 1;
+}
 input::placeholder, textarea::placeholder { color: var(--n500); }
 option { background: var(--n900); color: var(--n50); }
+
+/* ช่องติ๊กใช้สีของเบราว์เซอร์เป็นค่าเริ่มต้น ซึ่งบนพื้นมืดแทบมองไม่เห็นว่าติ๊กไปหรือยัง */
+input[type='checkbox'], input[type='radio'] {
+  accent-color: var(--e500);
+  width: 15px; height: 15px;
+  cursor: pointer;
+}
 button { cursor: pointer; border: none; background: none; padding: 0; }
 a { color: inherit; text-decoration: none; }
 h1, h2, h3, h4, p { margin: 0; font-weight: inherit; }
@@ -1096,6 +1115,38 @@ table.data .num { text-align: right; font-variant-numeric: tabular-nums; }
 .body :is(select, input, textarea):focus-visible {
   outline: 2px solid var(--o-accent); outline-offset: -1px; border-color: var(--o-accent);
 }
+
+/* รายการใน dropdown ไม่ได้สืบทอดสีจาก select ต้องสั่งแยก
+   ถ้าไม่สั่ง มันจะใช้ option ของธีมมืดจากกฎกลาง กลายเป็นตัวหนังสือมืดบนแผ่นขาว */
+.body option { background: var(--o-sheet); color: var(--o-ink); }
+
+/* ช่องที่แก้ไม่ได้ เช่น ราคาของเมนูที่รวมอยู่ในบุฟเฟต์อยู่แล้ว
+   ยังต้องดูออกว่าเป็นช่องกรอก ไม่ใช่บล็อกเทาตัน */
+.body :is(select, input, textarea):disabled {
+  background: var(--o-ground);
+  color: var(--o-ink-3);
+  border-color: var(--o-line);
+  cursor: not-allowed;
+  opacity: 1;
+}
+
+/* ขอบเข้มขึ้นตอนชี้ ให้รู้ว่าคลิกแก้ได้ — ในตารางที่มีช่องกรอกเป็นสิบแถว
+   ถ้าขอบบางเท่ากันหมดจะแยกไม่ออกว่าช่องไหนกำลังจะแก้ */
+.body :is(select, input, textarea):hover:not(:disabled):not(:focus) {
+  border-color: var(--o-ink-3);
+}
+
+.body input::placeholder, .body textarea::placeholder { color: var(--o-ink-3); }
+.body input[type='checkbox'], .body input[type='radio'] { accent-color: var(--o-accent); }
+
+/* ช่องกรอกที่อยู่ในช่องตาราง ให้เต็มความกว้างของคอลัมน์และสูงเท่ากันทุกแถว
+   ค่าเริ่มต้นของเบราว์เซอร์ทำให้ input กับ select กว้างไม่เท่ากัน ตารางเลยดูรกและอ่านยาก */
+.body .data :is(input:not([type='checkbox']):not([type='radio']), select) {
+  width: 100%;
+  height: 30px;
+  font-size: 13px;
+}
+.body .data td { vertical-align: middle; }
 .body a:focus-visible { outline: 2px solid var(--o-accent); outline-offset: 2px; }
 
 
@@ -1147,10 +1198,19 @@ table.data .num { text-align: right; font-variant-numeric: tabular-nums; }
   outline: none; border-color: var(--o-accent); box-shadow: 0 0 0 1px var(--o-accent);
 }
 .body .field input::placeholder { color: var(--o-ink-3); }
+/* ลูกศรวาดด้วย gradient สองอัน ต้องมี background-size กับ no-repeat เสมอ
+   ถ้าขาดไป gradient จะไทล์เต็มกล่องจนกลายเป็นสี่เหลี่ยมทึบมีสามเหลี่ยมยักษ์
+   และต้องประกาศ background-color ซ้ำ เพราะ background-image ไม่ได้พาสีพื้นมาด้วย */
 .body .field select {
+  appearance: none;
+  cursor: pointer;
+  padding-right: 30px;
+  background-color: var(--o-sheet);
   background-image: linear-gradient(45deg, transparent 50%, var(--o-ink-2) 50%),
                     linear-gradient(135deg, var(--o-ink-2) 50%, transparent 50%);
   background-position: calc(100% - 15px) 14px, calc(100% - 10px) 14px;
+  background-size: 5px 5px, 5px 5px;
+  background-repeat: no-repeat;
 }
 
 /* ── กล่องข้อความแจ้ง ─────────────────────────────────────────────────────
